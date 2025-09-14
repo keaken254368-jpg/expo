@@ -1,96 +1,656 @@
----
-title: Internal distribution
-description: Learn how EAS Build provides shareable URLs for your builds with your team for internal distribution.
----
+import React, { useEffect, useMemo, useState } from "react";
 
-import { GraduationHat02DuotoneIcon } from '@expo/styleguide-icons/duotone/GraduationHat02DuotoneIcon';
+/**
+ * Motor Maintenance App (TH)
+ * - รายชื่อมอเตอร์ 100 ตัว (M001..M100)
+ * - ค้นหาชื่อ + ประวัติพร้อมกัน (Global Search)
+ * - หน้ารายชื่อหาง่าย กรองได้แบบพิมพ์ทันที
+ * - หน้ารายละเอียด: ข้อมูลมอเตอร์ + ประวัติซ่อม/บำรุง + รายการ PA
+ * - เก็บข้อมูลใน localStorage (ไม่มีแบ็คเอนด์)
+ * - นำเข้า/ส่งออกเป็น JSON ได้
+ * 
+ * หมายเหตุ: เพื่อความเรียบง่าย ไม่ใช้ไลบรารีเพิ่มเติม
+ */
 
-import { BoxLink } from '~/ui/components/BoxLink';
-import { Collapsible } from '~/ui/components/Collapsible';
-import { Terminal } from '~/ui/components/Snippet';
+const LS_KEY = "motor-maintenance-app-v1";
 
-Setting up an internal distribution build only takes a few minutes with EAS Build and provides a streamlined way to share your app with your team and other testers for feedback. It does this by providing a URL that allows them to install the app directly to their device. If you are not sure yet if you want to use this approach and want to learn about all of the options available for distributing your app internally, refer to the [overview of distribution apps for review](/review/overview/) guide.
+function pad3(n) {
+  return String(n).padStart(3, "0");
+}
 
-## Using internal distribution
+function seedData() {
+  const motors = Array.from({ length: 100 }, (_, i) => ({
+    code: `M${pad3(i + 1)}`,
+    name: `มอเตอร์-${pad3(i + 1)}`,
+    spec: "",
+    location: "",
+    installed: "",
+    manufacturer: "",
+    pa: "",
+    notes: "",
+  }));
 
-To configure a build profile for internal distribution, set `"distribution": "internal"` on it. When you set this configuration, it has the following effects on the build profile:
+  // ตัวอย่างข้อมูลเล็ก ๆ สำหรับ 3 ตัวแรก
+  const history = [
+    {
+      motorCode: "M001",
+      date: today(-45),
+      type: "บำรุงรักษาตามแผน",
+      issue: "ตรวจสภาพทั่วไป",
+      cause: "",
+      fix: "ทำความสะอาด/อัดจาระบี",
+      part: "จาระบี LG-EP2",
+      downtime: 1.0,
+      owner: "ทีมซ่อมบำรุง",
+      cost: 350,
+      ref: "M001-PM-0001",
+      pa: "PA-M1-0007",
+      status: "เสร็จสิ้น",
+      nextDue: addDays(45),
+      notes: "",
+    },
+    {
+      motorCode: "M002",
+      date: today(-20),
+      type: "ซ่อมฉุกเฉิน",
+      issue: "มีเสียงดังผิดปกติ",
+      cause: "ลูกปืนสึก",
+      fix: "เปลี่ยนลูกปืน",
+      part: "ลูกปืน 6204-2RS",
+      downtime: 3.5,
+      owner: "ช่างสมชาย",
+      cost: 1200,
+      ref: "M002-BR-0002",
+      pa: "PA-M2-0010",
+      status: "เสร็จสิ้น",
+      nextDue: addDays(70),
+      notes: "ทดสอบแล้วปกติ",
+    },
+    {
+      motorCode: "M003",
+      date: today(-5),
+      type: "ตรวจเช็ก",
+      issue: "ตรวจรั่วซึม",
+      cause: "",
+      fix: "ขันแน่นจุดต่อ",
+      part: "—",
+      downtime: 0.5,
+      owner: "ช่างวิทยา",
+      cost: 0,
+      ref: "M003-IN-0003",
+      pa: "",
+      status: "เสร็จสิ้น",
+      nextDue: addDays(85),
+      notes: "",
+    },
+  ];
 
-- **Android**: The default behavior for the `gradleCommand` will change to generate an APK instead of an AAB. If you have specified a custom `gradleCommand`, then make sure that it [produces an APK](/build-reference/apk/#configuring-a-profile-to-build-apks), or it won't be directly installable on an Android device. Additionally, EAS Build will generate a new Android keystore for signing the APK, or it will use an existing one if the package name is the same as your [development build](/develop/development-builds/introduction/).
-- **iOS**: Builds using this profile will use either [ad hoc or enterprise provisioning](#overview-of-distribution-mechanisms). When using ad hoc provisioning, EAS Build will generate a provisioning profile containing an allow-list of device UDIDs, and only those devices in the list at build time will be able to install it. You can add a device by running `eas device:create` and creating a new build.
-- By default, internal distribution build URLs are available to anybody with the URL, and each is identified by a 32 character UUID. If you would like to require sign-in to an authorized Expo account to access these builds, you can disable the **Unauthenticated access to internal builds** option in your [project settings](https://expo.dev/accounts/[account]/projects/[project]/settings).
+  const paOrders = [
+    {
+      motorCode: "M001",
+      date: today(-70),
+      paNo: "PA-M1-0007",
+      paType: "มอเตอร์",
+      desc: "จัดซื้อซีล+จาระบี สำหรับ M001",
+      qty: 1,
+      unit: "งาน",
+      unitPrice: 350,
+      vendor: "ACME Parts",
+      status: "รับของแล้ว",
+      invoice: "INV-55210",
+      link: "",
+      notes: "",
+    },
+    {
+      motorCode: "M002",
+      date: today(-30),
+      paNo: "PA-M2-0010",
+      paType: "มอเตอร์",
+      desc: "อะไหล่ฝาครอบพัดลม M002",
+      qty: 1,
+      unit: "ชิ้น",
+      unitPrice: 450,
+      vendor: "Breeze",
+      status: "ร่าง",
+      invoice: "",
+      link: "",
+      notes: "",
+    },
+  ];
 
-See the tutorial on Internal distribution with EAS Build below for more information on how to configure, create, and install a build:
+  return { motors, history, paOrders };
+}
 
-<BoxLink
-  title="Create and share internal distribution build"
-  description="Complete step-by-step guide to setting up and sharing internal distribution builds with EAS Build."
-  href="/tutorial/eas/internal-distribution-builds/"
-  Icon={GraduationHat02DuotoneIcon}
-/>
+function today(offsetDays = 0) {
+  const d = new Date();
+  d.setDate(d.getDate() + offsetDays);
+  return d.toISOString().slice(0, 10);
+}
+function addDays(days) {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
 
-### Automation on CI (optional)
+const JOB_TYPES = [
+  "ตรวจเช็ก",
+  "บำรุงรักษาตามแผน",
+  "ซ่อมฉุกเฉิน",
+  "เปลี่ยนอะไหล่",
+  "ทำความสะอาด",
+];
+const JOB_STATUS = ["ใหม่", "กำลังดำเนินการ", "เสร็จสิ้น", "รอดำเนินการ", "ยกเลิก"];
+const PA_TYPES = ["มอเตอร์", "อะไหล่", "งานบริการ", "อื่นๆ"];
+const PA_STATUS = ["ร่าง", "สั่งซื้อแล้ว", "รับของแล้ว", "ยกเลิก"];
 
-It's possible to run internal distribution builds non-interactively in CI using the `--non-interactive` flag. However, if you are using ad hoc provisioning on iOS you will not be able to add new devices to your provisioning profile when using this flag. After registering a device through `eas device:create`, you need to run `eas build` interactively and authenticate with Apple in order for EAS to add the device to your provisioning profile. [Learn more about triggering builds from CI](/build/building-on-ci).
+export default function App() {
+  const [data, setData] = useLocalState(LS_KEY, seedData());
+  const [query, setQuery] = useState(""); // global search (ชื่อ/ประวัติพร้อมกัน)
+  const [selectedCode, setSelectedCode] = useState("M001");
+  const selectedMotor = useMemo(
+    () => data.motors.find((m) => m.code === selectedCode) || data.motors[0],
+    [data.motors, selectedCode]
+  );
 
-### Managing devices
+  const filteredMotors = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return data.motors;
+    return data.motors.filter((m) =>
+      (m.code + " " + (m.name || "")).toLowerCase().includes(q)
+    );
+  }, [data.motors, query]);
 
-You can see any devices registered via `eas device:create` by running:
+  // Search history across all motors
+  const historyResults = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+    return data.history
+      .filter((h) =>
+        [
+          h.motorCode,
+          h.date,
+          h.type,
+          h.issue,
+          h.cause,
+          h.fix,
+          h.part,
+          String(h.downtime ?? ""),
+          h.owner,
+          String(h.cost ?? ""),
+          h.ref,
+          h.pa,
+          h.status,
+          h.nextDue,
+          h.notes,
+        ]
+          .join(" ")
+          .toLowerCase()
+          .includes(q)
+      )
+      .slice(0, 200); // cap results
+  }, [data.history, query]);
 
-<Terminal
-  cmd={['# List devices registered for ad hoc provisioning', '$ eas device:list']}
-  cmdCopy="eas device:list"
-/>
+  // Handlers: save motor info
+  function updateMotorField(code, field, value) {
+    setData((prev) => ({
+      ...prev,
+      motors: prev.motors.map((m) => (m.code === code ? { ...m, [field]: value } : m)),
+    }));
+  }
 
-Devices registered with Expo for ad hoc provisioning will appear on your Apple Developer Portal after they are used to generate a provisioning profile for a new internal build with EAS Build or to [resign an existing build](/app-signing/app-credentials/#re-signing-new-credentials) with `eas build:resign`.
+  // Handlers: history
+  function addHistoryEntry(entry) {
+    setData((prev) => ({ ...prev, history: [{ ...entry }, ...prev.history] }));
+  }
+  function deleteHistoryEntry(idx) {
+    setData((prev) => ({
+      ...prev,
+      history: prev.history.filter((_, i) => i !== idx),
+    }));
+  }
 
-#### Remove devices
+  // Handlers: PA
+  function addPAEntry(entry) {
+    setData((prev) => ({ ...prev, paOrders: [{ ...entry }, ...prev.paOrders] }));
+  }
+  function deletePAEntry(idx) {
+    setData((prev) => ({ ...prev, paOrders: prev.paOrders.filter((_, i) => i !== idx) }));
+  }
 
-If a device is no longer in use, it can be removed from this list by running:
+  // Import/Export JSON
+  function exportJSON() {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `motor_data_${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+  function importJSON(ev) {
+    const file = ev.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const obj = JSON.parse(String(reader.result));
+        if (!obj.motors || !obj.history || !obj.paOrders) throw new Error("รูปแบบไฟล์ไม่ถูกต้อง");
+        setData(obj);
+      } catch (e) {
+        alert("นำเข้าไม่สำเร็จ: " + e.message);
+      }
+    };
+    reader.readAsText(file, "utf-8");
+  }
 
-<Terminal
-  cmd={[
-    '# Delete devices from your Expo account, optionally disable them on the Apple Developer Portal',
-    '$ eas device:delete',
-  ]}
-  cmdCopy="eas device:delete"
-/>
-This command will also prompt you to disable the device on the Apple Developer Portal. Disabled
-devices still count against [Apple's limit of 100
-devices](https://developer.apple.com/support/account/#:~:text=Resetting%20your%20device%20list%20annually)
-for ad hoc distribution per app.
+  // Derived: history + PA for selected motor
+  const motorHistory = useMemo(
+    () => data.history.filter((h) => h.motorCode === selectedMotor?.code),
+    [data.history, selectedMotor]
+  );
+  const motorPAs = useMemo(
+    () => data.paOrders.filter((p) => p.motorCode === selectedMotor?.code),
+    [data.paOrders, selectedMotor]
+  );
 
-#### Rename devices
+  const [activeTab, setActiveTab] = useState("history"); // "history" | "pa"
 
-Devices added via the website URL/QR code will default to displaying their UDID when selecting them for an EAS Build. You can assign friendly names to your devices with the following command:
+  return (
+    <div className="min-h-screen w-full bg-slate-50 text-slate-800">
+      {/* Header */}
+      <div className="sticky top-0 z-10 bg-white/90 backdrop-blur border-b border-slate-200">
+        <div className="max-w-7xl mx-auto px-4 py-3 flex items-center gap-3">
+          <div className="text-xl font-semibold">🛠️ ระบบบันทึกมอเตอร์ 100 ตัว</div>
+          <div className="ml-auto flex items-center gap-2">
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="ค้นหาชื่อ/รหัส/ประวัติ/เลข PA/คำอธิบาย…"
+              className="w-[420px] rounded-xl border border-slate-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-sky-400"
+            />
+            <button
+              onClick={() => setQuery("")}
+              className="rounded-xl border px-3 py-2 hover:bg-slate-100"
+            >ล้าง</button>
+            <button onClick={exportJSON} className="rounded-xl border px-3 py-2 hover:bg-slate-100">ส่งออก JSON</button>
+            <label className="rounded-xl border px-3 py-2 hover:bg-slate-100 cursor-pointer">
+              นำเข้า JSON
+              <input type="file" accept="application/json" onChange={importJSON} className="hidden" />
+            </label>
+          </div>
+        </div>
+        {/* Global search results (names + history) */}
+        {query.trim() && (
+          <div className="max-w-7xl mx-auto px-4 pb-3 grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="bg-white rounded-xl border p-3 shadow-sm">
+              <div className="font-semibold mb-2">รายชื่อที่ตรง ({filteredMotors.length})</div>
+              <div className="max-h-60 overflow-auto divide-y">
+                {filteredMotors.slice(0, 200).map((m) => (
+                  <div key={m.code} className="py-1 flex items-center justify-between">
+                    <div>
+                      <div className="font-medium">{m.code} – {m.name}</div>
+                      <div className="text-xs text-slate-500">{m.location || "(ยังไม่ระบุที่ตั้ง)"}</div>
+                    </div>
+                    <button
+                      className="text-sky-600 hover:underline"
+                      onClick={() => setSelectedCode(m.code)}
+                    >เปิด</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="bg-white rounded-xl border p-3 shadow-sm">
+              <div className="font-semibold mb-2">ประวัติที่ตรง ({historyResults.length})</div>
+              <div className="max-h-60 overflow-auto divide-y">
+                {historyResults.map((h, idx) => (
+                  <div key={idx} className="py-1 text-sm">
+                    <div className="flex items-center justify-between">
+                      <div className="font-medium">{h.motorCode} · {h.date} · {h.type}</div>
+                      <button className="text-sky-600 hover:underline" onClick={() => setSelectedCode(h.motorCode)}>ไปที่มอเตอร์</button>
+                    </div>
+                    <div className="text-slate-600">{h.issue || h.fix || h.notes}</div>
+                    {h.pa && <div className="text-xs text-slate-500">PA: {h.pa} · เลขอ้างอิง: {h.ref}</div>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
 
-<Terminal
-  cmd={['# Rename devices on Expo and the Apple Developer Portal', '$ eas device:rename']}
-  cmdCopy="eas device:rename"
-/>
+      {/* Body */}
+      <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-[320px,1fr] gap-4 px-4 py-4">
+        {/* Sidebar: motor list */}
+        <aside className="bg-white rounded-2xl border p-3 h-fit sticky top-[76px]">
+          <div className="flex items-center gap-2 mb-2">
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="ค้นหารายชื่อ/รหัส…"
+              className="w-full rounded-xl border border-slate-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-sky-400"
+            />
+          </div>
+          <div className="max-h-[65vh] overflow-auto divide-y">
+            {filteredMotors.map((m) => (
+              <button
+                key={m.code}
+                onClick={() => setSelectedCode(m.code)}
+                className={`text-left w-full px-2 py-2 hover:bg-slate-50 ${
+                  selectedMotor?.code === m.code ? "bg-sky-50 border-l-4 border-sky-400" : ""
+                }`}
+              >
+                <div className="font-medium">{m.code} – {m.name}</div>
+                <div className="text-xs text-slate-500">{m.location || "(ยังไม่ระบุที่ตั้ง)"}</div>
+              </button>
+            ))}
+          </div>
+        </aside>
 
-## Overview of distribution mechanisms
+        {/* Main: motor detail */}
+        <main className="space-y-4">
+          {/* Motor header */}
+          <div className="bg-white rounded-2xl border p-4 shadow-sm">
+            <div className="flex items-center gap-3">
+              <div className="text-lg font-semibold">รายละเอียดมอเตอร์</div>
+              <div className="ml-auto text-sm text-slate-500">รหัสคงที่ (เพื่อความถูกต้องของประวัติ)</div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3">
+              <LabeledInput label="รหัสมอเตอร์" value={selectedMotor?.code || ""} readOnly />
+              <LabeledInput label="ชื่อมอเตอร์" value={selectedMotor?.name || ""} onChange={(v) => updateMotorField(selectedMotor.code, "name", v)} />
+              <LabeledInput label="เลข PA มอเตอร์" value={selectedMotor?.pa || ""} onChange={(v) => updateMotorField(selectedMotor.code, "pa", v)} />
+              <LabeledInput label="รุ่น/สเปค" value={selectedMotor?.spec || ""} onChange={(v) => updateMotorField(selectedMotor.code, "spec", v)} />
+              <LabeledInput label="สถานที่" value={selectedMotor?.location || ""} onChange={(v) => updateMotorField(selectedMotor.code, "location", v)} />
+              <LabeledInput type="date" label="วันที่ติดตั้ง" value={selectedMotor?.installed || ""} onChange={(v) => updateMotorField(selectedMotor.code, "installed", v)} />
+              <LabeledInput label="ผู้ผลิต" value={selectedMotor?.manufacturer || ""} onChange={(v) => updateMotorField(selectedMotor.code, "manufacturer", v)} />
+              <LabeledInput className="md:col-span-3" label="หมายเหตุ" value={selectedMotor?.notes || ""} onChange={(v) => updateMotorField(selectedMotor.code, "notes", v)} />
+            </div>
+          </div>
 
-The following are the different mechanisms for distributing your app to devices supported by internal distribution.
+          {/* Tabs */}
+          <div className="bg-white rounded-2xl border p-4 shadow-sm">
+            <div className="flex items-center gap-2 border-b pb-2 mb-3">
+              <TabButton active={activeTab === "history"} onClick={() => setActiveTab("history")}>ประวัติซ่อม/บำรุง</TabButton>
+              <TabButton active={activeTab === "pa"} onClick={() => setActiveTab("pa")}>รายการ PA</TabButton>
+            </div>
 
-<Collapsible summary="Android: Build and distribute an APK">
+            {activeTab === "history" ? (
+              <HistorySection
+                motor={selectedMotor}
+                rows={motorHistory}
+                onAdd={addHistoryEntry}
+                onDelete={(idx) => {
+                  // ต้องหาค่า index ของ global history
+                  const globalIdx = data.history.findIndex((h) => h === motorHistory[idx]);
+                  if (globalIdx >= 0) deleteHistoryEntry(globalIdx);
+                }}
+              />
+            ) : (
+              <PASection
+                motor={selectedMotor}
+                rows={motorPAs}
+                onAdd={addPAEntry}
+                onDelete={(idx) => {
+                  const globalIdx = data.paOrders.findIndex((p) => p === motorPAs[idx]);
+                  if (globalIdx >= 0) deletePAEntry(globalIdx);
+                }}
+              />
+            )}
+          </div>
+        </main>
+      </div>
 
-To share your app to Android devices, you must build an APK (Android application package file) of your project. APKs can be installed directly to an Android device over USB, by downloading the file over the web or through an email or chat app, once the user accepts the security warning for installing an app that has not gone through Play Store review. AAB (Android app bundle) binaries of your app must be distributed through the Play Store.
+      {/* Footer */}
+      <div className="text-center text-xs text-slate-500 py-6">ข้อมูลเก็บบนเครื่องของคุณ (localStorage) · ส่งออก/นำเข้า JSON ได้</div>
+    </div>
+  );
+}
 
-</Collapsible>
+function TabButton({ active, onClick, children }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`px-3 py-1.5 rounded-xl border ${active ? "bg-sky-600 text-white border-sky-600" : "bg-white hover:bg-slate-50"}`}
+    >
+      {children}
+    </button>
+  );
+}
 
-<Collapsible summary="iOS: Ad Hoc distribution">
+function LabeledInput({ label, value, onChange, type = "text", className = "", readOnly }) {
+  return (
+    <label className={`text-sm ${className}`}>
+      <div className="mb-1 text-slate-600">{label}</div>
+      <input
+        type={type}
+        value={value || ""}
+        readOnly={readOnly}
+        onChange={(e) => onChange && onChange(type === "number" ? Number(e.target.value) : e.target.value)}
+        className={`w-full rounded-xl border border-slate-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-sky-400 ${readOnly ? "bg-slate-100" : ""}`}
+      />
+    </label>
+  );
+}
 
-Apple offers [ad hoc provisioning profiles](https://help.apple.com/xcode/mac/current/#/dev7ccaf4d3c) to distribute your app to test devices once they have been registered
-to your Apple Developer account. This method requires a paid Apple Developer account and that account will only be able to use this method to distribute to at most 100 iPhones per year.
+function LabeledSelect({ label, value, onChange, options }) {
+  return (
+    <label className="text-sm">
+      <div className="mb-1 text-slate-600">{label}</div>
+      <select
+        value={value || ""}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full rounded-xl border border-slate-300 px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-sky-400"
+      >
+        <option value="">— เลือก —</option>
+        {options.map((op) => (
+          <option key={op} value={op}>{op}</option>
+        ))}
+      </select>
+    </label>
+  );
+}
 
-You will need to know the UDID (Unique Device Identifier) of each device that will install your app, which may be challenging if you try to share with someone who is not a developer. Adding a new device will require a rebuild of your app or [re-signing the build with new credentials](/app-signing/app-credentials/#re-signing-new-credentials).
+function SectionTitle({ children }) {
+  return <div className="font-semibold text-slate-700 mb-2">{children}</div>;
+}
 
-Setting up Ad Hoc certificates correctly can be intimidating if you haven't done it before and tedious even if you have. If you're using [EAS Build](#internal-distribution-with-eas-build), which is optimized for Expo and React Native projects, we'll handle the time-consuming parts of setting up Ad Hoc credentials for you.
+function HistorySection({ motor, rows, onAdd, onDelete }) {
+  const [form, setForm] = useState({
+    date: today(), type: "", issue: "", cause: "", fix: "", part: "", downtime: "", owner: "", cost: "", ref: "", pa: "", status: "", nextDue: "", notes: "",
+  });
 
-</Collapsible>
+  function submit() {
+    if (!motor?.code) return;
+    if (!form.date || !form.type) {
+      alert("กรอก 'วันที่' และ 'ประเภทงาน' อย่างน้อย");
+      return;
+    }
+    onAdd({
+      motorCode: motor.code,
+      date: form.date,
+      type: form.type,
+      issue: form.issue,
+      cause: form.cause,
+      fix: form.fix,
+      part: form.part,
+      downtime: Number(form.downtime || 0),
+      owner: form.owner,
+      cost: Number(form.cost || 0),
+      ref: form.ref,
+      pa: form.pa,
+      status: form.status,
+      nextDue: form.nextDue,
+      notes: form.notes,
+    });
+    setForm({ date: today(), type: "", issue: "", cause: "", fix: "", part: "", downtime: "", owner: "", cost: "", ref: "", pa: "", status: "", nextDue: "", notes: "" });
+  }
 
-<Collapsible summary="iOS: Enterprise distribution">
+  return (
+    <div className="space-y-3">
+      <SectionTitle>เพิ่มรายการใหม่</SectionTitle>
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+        <LabeledInput type="date" label="วันที่" value={form.date} onChange={(v) => setForm({ ...form, date: v })} />
+        <LabeledSelect label="ประเภทงาน" value={form.type} onChange={(v) => setForm({ ...form, type: v })} options={JOB_TYPES} />
+        <LabeledSelect label="สถานะ" value={form.status} onChange={(v) => setForm({ ...form, status: v })} options={JOB_STATUS} />
+        <LabeledInput label="เลขอ้างอิง" value={form.ref} onChange={(v) => setForm({ ...form, ref: v })} />
+        <LabeledInput label="อาการ/ปัญหา" value={form.issue} onChange={(v) => setForm({ ...form, issue: v })} />
+        <LabeledInput label="สาเหตุ" value={form.cause} onChange={(v) => setForm({ ...form, cause: v })} />
+        <LabeledInput label="วิธีแก้ไข" value={form.fix} onChange={(v) => setForm({ ...form, fix: v })} />
+        <LabeledInput label="อะไหล่ที่ใช้" value={form.part} onChange={(v) => setForm({ ...form, part: v })} />
+        <LabeledInput type="number" label="เวลาเครื่องหยุด (ชม.)" value={form.downtime} onChange={(v) => setForm({ ...form, downtime: v })} />
+        <LabeledInput label="ผู้รับผิดชอบ" value={form.owner} onChange={(v) => setForm({ ...form, owner: v })} />
+        <LabeledInput type="number" label="ค่าใช้จ่าย (THB)" value={form.cost} onChange={(v) => setForm({ ...form, cost: v })} />
+        <LabeledInput label="เลข PA" value={form.pa} onChange={(v) => setForm({ ...form, pa: v })} />
+        <LabeledInput type="date" label="กำหนดบำรุงครั้งถัดไป" value={form.nextDue} onChange={(v) => setForm({ ...form, nextDue: v })} />
+        <LabeledInput className="md:col-span-4" label="หมายเหตุ" value={form.notes} onChange={(v) => setForm({ ...form, notes: v })} />
+      </div>
+      <div className="flex gap-2">
+        <button onClick={submit} className="px-4 py-2 rounded-xl bg-sky-600 text-white hover:bg-sky-700">บันทึกรายการ</button>
+      </div>
 
-If your app is only intended for internal use by employees of a large organization and cannot be distributed through the App Store, you should use Enterprise distribution. Unlike with Ad Hoc Distribution, the number of devices that can install your app is unlimited, and you do not need to manage each device's UDID. Often these apps will be distributed to end users through a mobile device management (MDM) solution. Enterprise Distribution requires membership in the [Apple Developer Enterprise Program](https://developer.apple.com/programs/enterprise/). Organizations joining the Enterprise Program must meet additional requirements beyond what is required for App Store distribution.
+      <SectionTitle>รายการล่าสุด</SectionTitle>
+      <div className="overflow-auto rounded-xl border">
+        <table className="min-w-full text-sm">
+          <thead className="bg-slate-100">
+            <tr>
+              {["วันที่","ประเภทงาน","อาการ/ปัญหา","สาเหตุ","วิธีแก้ไข","อะไหล่","Downtime","ผู้รับผิดชอบ","ค่าใช้จ่าย","อ้างอิง","PA","สถานะ","ถัดไป","หมายเหตุ"," "].map((h) => (
+                <th key={h} className="px-2 py-2 text-left whitespace-nowrap">{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={i} className="odd:bg-white even:bg-slate-50">
+                <td className="px-2 py-1 whitespace-nowrap">{r.date}</td>
+                <td className="px-2 py-1 whitespace-nowrap">{r.type}</td>
+                <td className="px-2 py-1">{r.issue}</td>
+                <td className="px-2 py-1">{r.cause}</td>
+                <td className="px-2 py-1">{r.fix}</td>
+                <td className="px-2 py-1 whitespace-nowrap">{r.part}</td>
+                <td className="px-2 py-1 text-right whitespace-nowrap">{r.downtime}</td>
+                <td className="px-2 py-1 whitespace-nowrap">{r.owner}</td>
+                <td className="px-2 py-1 text-right whitespace-nowrap">{r.cost?.toLocaleString()}</td>
+                <td className="px-2 py-1 whitespace-nowrap">{r.ref}</td>
+                <td className="px-2 py-1 whitespace-nowrap">{r.pa}</td>
+                <td className="px-2 py-1 whitespace-nowrap">{r.status}</td>
+                <td className="px-2 py-1 whitespace-nowrap">{r.nextDue}</td>
+                <td className="px-2 py-1">{r.notes}</td>
+                <td className="px-2 py-1 text-right"><button className="text-rose-600 hover:underline" onClick={() => onDelete(i)}>ลบ</button></td>
+              </tr>
+            ))}
+            {rows.length === 0 && (
+              <tr><td className="px-2 py-6 text-center text-slate-500" colSpan={15}>ยังไม่มีรายการ</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
 
-</Collapsible>
+function PASection({ motor, rows, onAdd, onDelete }) {
+  const [form, setForm] = useState({
+    date: today(), paNo: "", paType: "", desc: "", qty: "", unit: "ชิ้น", unitPrice: "", vendor: "", status: "", invoice: "", link: "", notes: "",
+  });
+
+  function submit() {
+    if (!motor?.code) return;
+    if (!form.date || !form.paNo) {
+      alert("กรอก 'วันที่สั่งซื้อ' และ 'เลข PA'");
+      return;
+    }
+    onAdd({
+      motorCode: motor.code,
+      date: form.date,
+      paNo: form.paNo,
+      paType: form.paType,
+      desc: form.desc,
+      qty: Number(form.qty || 0),
+      unit: form.unit,
+      unitPrice: Number(form.unitPrice || 0),
+      vendor: form.vendor,
+      status: form.status,
+      invoice: form.invoice,
+      link: form.link,
+      notes: form.notes,
+    });
+    setForm({ date: today(), paNo: "", paType: "", desc: "", qty: "", unit: "ชิ้น", unitPrice: "", vendor: "", status: "", invoice: "", link: "", notes: "" });
+  }
+
+  return (
+    <div className="space-y-3">
+      <SectionTitle>เพิ่ม PA</SectionTitle>
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+        <LabeledInput type="date" label="วันที่สั่งซื้อ" value={form.date} onChange={(v) => setForm({ ...form, date: v })} />
+        <LabeledInput label="เลข PA" value={form.paNo} onChange={(v) => setForm({ ...form, paNo: v })} />
+        <LabeledSelect label="ประเภท PA" value={form.paType} onChange={(v) => setForm({ ...form, paType: v })} options={PA_TYPES} />
+        <LabeledSelect label="สถานะ PA" value={form.status} onChange={(v) => setForm({ ...form, status: v })} options={PA_STATUS} />
+        <LabeledInput className="md:col-span-2" label="คำอธิบาย" value={form.desc} onChange={(v) => setForm({ ...form, desc: v })} />
+        <LabeledInput type="number" label="จำนวน" value={form.qty} onChange={(v) => setForm({ ...form, qty: v })} />
+        <LabeledInput label="หน่วย" value={form.unit} onChange={(v) => setForm({ ...form, unit: v })} />
+        <LabeledInput type="number" label="ราคาต่อหน่วย" value={form.unitPrice} onChange={(v) => setForm({ ...form, unitPrice: v })} />
+        <LabeledInput label="ผู้ขาย" value={form.vendor} onChange={(v) => setForm({ ...form, vendor: v })} />
+        <LabeledInput label="เลขใบกำกับ/ใบส่งของ" value={form.invoice} onChange={(v) => setForm({ ...form, invoice: v })} />
+        <LabeledInput label="ลิงก์" value={form.link} onChange={(v) => setForm({ ...form, link: v })} />
+        <LabeledInput className="md:col-span-4" label="หมายเหตุ" value={form.notes} onChange={(v) => setForm({ ...form, notes: v })} />
+      </div>
+      <div className="flex gap-2">
+        <button onClick={submit} className="px-4 py-2 rounded-xl bg-sky-600 text-white hover:bg-sky-700">บันทึก PA</button>
+      </div>
+
+      <SectionTitle>รายการ PA ของมอเตอร์นี้</SectionTitle>
+      <div className="overflow-auto rounded-xl border">
+        <table className="min-w-full text-sm">
+          <thead className="bg-slate-100">
+            <tr>
+              {["วันที่สั่งซื้อ","เลข PA","ประเภท","คำอธิบาย","จำนวน","หน่วย","ราคาต่อหน่วย","ราคารวม","ผู้ขาย","สถานะ","ใบกำกับ/ส่งของ","ลิงก์","หมายเหตุ"," "].map((h) => (
+                <th key={h} className="px-2 py-2 text-left whitespace-nowrap">{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={i} className="odd:bg-white even:bg-slate-50">
+                <td className="px-2 py-1 whitespace-nowrap">{r.date}</td>
+                <td className="px-2 py-1 whitespace-nowrap">{r.paNo}</td>
+                <td className="px-2 py-1 whitespace-nowrap">{r.paType}</td>
+                <td className="px-2 py-1">{r.desc}</td>
+                <td className="px-2 py-1 text-right whitespace-nowrap">{r.qty}</td>
+                <td className="px-2 py-1 whitespace-nowrap">{r.unit}</td>
+                <td className="px-2 py-1 text-right whitespace-nowrap">{r.unitPrice?.toLocaleString()}</td>
+                <td className="px-2 py-1 text-right whitespace-nowrap">{(r.qty * r.unitPrice || 0).toLocaleString()}</td>
+                <td className="px-2 py-1 whitespace-nowrap">{r.vendor}</td>
+                <td className="px-2 py-1 whitespace-nowrap">{r.status}</td>
+                <td className="px-2 py-1 whitespace-nowrap">{r.invoice}</td>
+                <td className="px-2 py-1 truncate max-w-[200px]"><a href={r.link} target="_blank" rel="noreferrer" className="text-sky-600 hover:underline">{r.link}</a></td>
+                <td className="px-2 py-1">{r.notes}</td>
+                <td className="px-2 py-1 text-right"><button className="text-rose-600 hover:underline" onClick={() => onDelete(i)}>ลบ</button></td>
+              </tr>
+            ))}
+            {rows.length === 0 && (
+              <tr><td className="px-2 py-6 text-center text-slate-500" colSpan={14}>ยังไม่มีรายการ</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function useLocalState(key, initialValue) {
+  const [state, setState] = useState(() => {
+    try {
+      const raw = localStorage.getItem(key);
+      return raw ? JSON.parse(raw) : initialValue;
+    } catch (e) {
+      return initialValue;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(key, JSON.stringify(state));
+    } catch (e) {
+      // ignore
+    }
+  }, [key, state]);
+  return [state, setState];
+}
